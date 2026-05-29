@@ -1,0 +1,9 @@
+[submodule "extern/HermesTrader"]
+	path = extern/HermesTrader
+	url = https://github.com/madlybong/HermesTrader.git
+[submodule "extern/hermes_common"]
+	path = extern/hermes_common
+	url = https://github.com/madlybong/HermesCommon.git
+[submodule "extern/HermesPortal"]
+	path = extern/HermesPortal
+	url = https://github.com/madlybong/HermesPortal.git

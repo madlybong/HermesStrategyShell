@@ -1,0 +1,23 @@
+* text=auto
+*.cpp text
+*.h text
+*.txt text
+*.md text
+*.cmake text
+*.json text
+*.in text
+*.yml text
+
+*.sh text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sln text eol=crlf
+
+*.png binary
+*.jpg binary
+*.dll binary
+*.exe binary
+*.lib binary
+*.so binary
+*.a binary
+*.o binary

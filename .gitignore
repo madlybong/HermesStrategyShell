@@ -1,0 +1,55 @@
+# Build outputs
+build/
+dist/
+out/
+bin/
+obj/
+*.exe
+*.dll
+*.so
+*.a
+*.lib
+
+# Node (root — dev tools only)
+/node_modules/
+/package.json
+/bun.lock
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+CMakeSettings.json
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+
+# Vcpkg
+vcpkg_installed/
+vcpkg-components/
+.vcpkg-root
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Logs and Data
+logs/
+*.log
+*.csv
+hermes_refno.seq
+.env
+
+# Monitor tool
+tools/monitor/build/
+tools/monitor/ui/dist/
+tools/monitor/ui/node_modules/
+tools/monitor/ui/.npmrc
+tools/monitor/monitor.db*
