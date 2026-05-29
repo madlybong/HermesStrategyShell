@@ -94,7 +94,7 @@ void Strategy::PushToLog(LogEntry::Type type, const std::string& content) {
 }
 
 void Strategy::LoggerWorkerLoop() {
-  PinThreadToCore(std::this_thread::get_id(), 1); // Optional background pinning
+  Hermes::Utils::PinThreadToCore(1); // Optional background pinning
   std::ofstream traceLog("trace.log", std::ios::app);
   std::ofstream opLog("orders.csv", std::ios::app);
   
@@ -126,7 +126,8 @@ void Strategy::WorkerLoop() {
 #ifdef HAS_HERMES_TRADER
   TradeContext ctx;
   while (running_) {
-    if (tradeQueue_.pop(ctx)) {
+    if (auto optCtx = tradeQueue_.pop()) {
+      ctx = *optCtx;
       std::lock_guard<std::mutex> lock(poolMutex_);
       executionQueue_.push(ctx);
       poolCv_.notify_one();
