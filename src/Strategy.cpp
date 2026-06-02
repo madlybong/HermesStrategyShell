@@ -2,6 +2,7 @@
 #include "ConfigLoader.h"
 #include "Utils/PinThread.h"
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <iomanip>
 
@@ -87,37 +88,79 @@ void Strategy::PrintTUI() const {
   // TODO: Print live diagnostics from diagnostics_ map
 }
 
-void Strategy::PushToLog(LogEntry::Type type, const std::string& content) {
+void Strategy::PushToLog(LogEntry::Type type, const std::string& content, const std::string& tag) {
   std::lock_guard<std::mutex> lock(logMutex_);
-  logQueue_.push({type, content});
+  logQueue_.push({type, content, tag});
   logCv_.notify_one();
 }
 
 void Strategy::LoggerWorkerLoop() {
   Hermes::Utils::PinThreadToCore(1); // Optional background pinning
-  std::ofstream traceLog("trace.log", std::ios::app);
-  std::ofstream opLog("orders.csv", std::ios::app);
-  
-  if (!opLog) std::cerr << "[Logger] Failed to open orders.csv\n";
-  if (!traceLog) std::cerr << "[Logger] Failed to open trace.log\n";
 
-  while (running_ || !logQueue_.empty()) {
-    std::unique_lock<std::mutex> lock(logMutex_);
-    logCv_.wait(lock, [this] { return !logQueue_.empty() || !running_; });
-    
-    while (!logQueue_.empty()) {
-      LogEntry entry = logQueue_.front();
-      logQueue_.pop();
-      lock.unlock();
+  // ── 1. Derive log directory from config (once, at startup) ────────────────
+  const std::string logDir = "logs/" + config_->GetConfig().LOG_DIR_NAME;
+  if (!std::filesystem::exists(logDir))
+    std::filesystem::create_directories(logDir);
 
-      if (entry.type == LogEntry::TRACE_LOG) {
-        if (traceLog) traceLog << entry.content << std::endl;
-      } else if (entry.type == LogEntry::OP_LOG) {
-        if (opLog) opLog << entry.content << std::endl;
-      }
-
-      lock.lock();
+  // ── 2. Track open streams keyed by file path (held open for lifetime) ─────
+  std::map<std::string, std::ofstream> streams;
+  auto getStream = [&](const std::string& path) -> std::ofstream& {
+    auto it = streams.find(path);
+    if (it == streams.end()) {
+      auto& f = streams[path];
+      f.open(path, std::ios::app);
+      if (!f) std::cerr << "[Logger] Failed to open: " << path << "\n";
+      return f;
     }
+    return it->second;
+  };
+
+  // ── 3. Batch drain loop ────────────────────────────────────────────────────
+  while (true) {
+    std::vector<LogEntry> batch;
+    {
+      std::unique_lock<std::mutex> lock(logMutex_);
+      logCv_.wait(lock, [this] { return !logQueue_.empty() || !running_; });
+      while (!logQueue_.empty()) {
+        batch.push_back(std::move(logQueue_.front()));
+        logQueue_.pop();
+      }
+    }
+    if (batch.empty() && !running_) break;
+
+    // ── 4. Compute date once per batch ──────────────────────────────────────
+    std::time_t now_t = std::time(nullptr);
+    char dateBuf[12];
+    std::strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", std::localtime(&now_t));
+    const std::string dateStr(dateBuf);
+    
+    // Cache the config for this batch iteration to avoid multiple mutex acquisitions
+    const auto appConfig = config_->GetConfig();
+
+    for (const auto& entry : batch) {
+      if (entry.type == LogEntry::TRACE_LOG) {
+        // ── 5a. Trace log: date-stamped, persistent stream ─────────────────
+        const std::string path = logDir + "/" + dateStr + "_exec_trace.log";
+        auto& f = getStream(path);
+        if (f) f << entry.content << "\n";
+
+      } else if (entry.type == LogEntry::OP_LOG) {
+        // ── 5b. Op log: tag-suffixed, date-stamped, CSV header guard ────────
+        const std::string suffix = entry.tag.empty()
+            ? "_op.log" : ("_" + entry.tag + "_op.log");
+        const std::string path = logDir + "/" + dateStr + suffix;
+
+        auto& f = getStream(path);
+        if (f) {
+          if (f.tellp() == 0 && !appConfig.OP_LOG_HEADER.empty())
+            f << appConfig.OP_LOG_HEADER << "\n";
+          f << entry.content << "\n";
+        }
+      }
+    }
+
+    // ── 6. Flush all open streams once per batch ───────────────────────────
+    for (auto& [path, f] : streams) f.flush();
   }
 }
 

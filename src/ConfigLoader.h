@@ -66,6 +66,10 @@ struct AppConfig {
   std::string TRADEX_PORT = "8080";
   std::string TRADEX_CLIENT_CODE = "";
   std::string TRADEX_AUTH_TOKEN = "";
+
+  // === Logging ===
+  std::string LOG_DIR_NAME = "strategy";
+  std::string OP_LOG_HEADER = "";
 };
 
 class ConfigLoader {

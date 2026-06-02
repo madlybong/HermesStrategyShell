@@ -99,4 +99,8 @@ void ConfigLoader::Load() {
   config_.SARAL_MSMQ_CLIENT_TYPE = hcfg.getString("SARAL_MSMQ_CLIENT_TYPE", config_.SARAL_MSMQ_CLIENT_TYPE);
   config_.SARAL_MSMQ_BOOK_TYPE = hcfg.getString("SARAL_MSMQ_BOOK_TYPE", config_.SARAL_MSMQ_BOOK_TYPE);
   config_.SARAL_MSMQ_PRODUCT = hcfg.getString("SARAL_MSMQ_PRODUCT", config_.SARAL_MSMQ_PRODUCT);
+
+  // Logging
+  config_.LOG_DIR_NAME = hcfg.getString("LOG_DIR_NAME", config_.LOG_DIR_NAME);
+  config_.OP_LOG_HEADER = hcfg.getString("OP_LOG_HEADER", config_.OP_LOG_HEADER);
 }

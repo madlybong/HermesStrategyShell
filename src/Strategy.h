@@ -95,13 +95,14 @@ private:
     enum Type { TRACE_LOG, OP_LOG };
     Type type;
     std::string content;
+    std::string tag;
   };
   std::queue<LogEntry> logQueue_;
   std::mutex logMutex_;
   std::condition_variable logCv_;
   std::thread loggerThread_;
   void LoggerWorkerLoop();
-  void PushToLog(LogEntry::Type type, const std::string& content);
+  void PushToLog(LogEntry::Type type, const std::string& content, const std::string& tag = "");
 
   // Async Execution
   std::thread workerThread_;
