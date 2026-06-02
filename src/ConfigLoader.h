@@ -22,6 +22,7 @@ struct AppConfig {
   std::string EXECUTION_MODE = "PARALLEL";
   std::string EXECUTION_ENGINE = "greeksoft";
   int EXECUTION_POOL_SIZE = 8;
+  std::string ORDER_SEQ_FILE = "hermes_refno.seq"; // "" = no persistence
 
   // === Timing ===
   int POLL_INTERVAL_MS = 500;

@@ -34,3 +34,14 @@
 
 ## 11. Component Map
 [List of executables, data files, their roles]
+
+---
+
+## Execution Observability (MANDATORY for HAS_HERMES_TRADER builds)
+
+When implementing `ExecuteStrategy`:
+1. **Always** call `TRACE("Phase N: ...")` before and after each `PlaceOrder` call
+2. **Always** log PlaceOrder return explicitly: `TRACE("Leg: " + (id.empty() ? "FAILED" : id))`
+3. **Never** use `std::endl` inside TRACE — use `"\n"` (TRACE accumulates in stringstream)
+4. **Always** push the final trace: `PushToLog(LogEntry::TRACE_LOG, "=== EXECUTION CYCLE " + trace.str())`
+5. **Guard** `IsOrderCompleted`/`IsOrderRejected` against empty orderId — return true immediately

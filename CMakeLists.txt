@@ -143,3 +143,10 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/data/masters")
     install(DIRECTORY "${CMAKE_SOURCE_DIR}/data/masters/" DESTINATION data/masters
             FILES_MATCHING PATTERN "*.csv")
 endif()
+
+# ── Sequence file: create a zero-seed if not present ─────────────────────────
+set(SEQ_FILE "${CMAKE_SOURCE_DIR}/hermes_refno.seq")
+if(NOT EXISTS "${SEQ_FILE}")
+  file(WRITE "${SEQ_FILE}" "0\n")
+endif()
+install(FILES "${SEQ_FILE}" DESTINATION .)

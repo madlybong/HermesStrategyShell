@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0.0] - 2026-06-02
+### Added
+- Startup HermesTrader confirmation log in constructor (engine, dry-run, pool size)
+- `GenerateOrderId()` now reads from `hermes_refno.seq` on startup and writes on shutdown
+- New `AppConfig::ORDER_SEQ_FILE` field (default `"hermes_refno.seq"`, overridable via `.env`)
+- `CMakeLists.txt` installs `hermes_refno.seq` (zero-seed if absent) into dist
+- Structured `ExecuteStrategy` scaffold: `TRACE()` macro, Phase 1/2/3 labels, error annotation
+- `IsOrderCompleted` / `IsOrderRejected` guard empty `orderId` → return true immediately
+- `STRATEGY_TEMPLATE.md` — execution observability rules added
+### Changed
+- `ExecuteStrategy` stub upgraded from a single TODO comment to a fully annotated scaffold
+
 ## [0.2.0.0] - 2026-06-02
 ### Added
 - Production-grade logger in `LoggerWorkerLoop`:

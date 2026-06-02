@@ -5,6 +5,7 @@
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
+#include <sstream>
 
 using namespace std::chrono;
 
@@ -23,8 +24,17 @@ Strategy::Strategy(std::shared_ptr<hermes::ContractManager> cm,
     pairCooldownNs_[i].store(0);
   }
 
-  // TODO: Load order high-water mark
-  // orderSeq_ = ReadSequenceFile("hermes_refno.seq");
+  // ── Sequence file: persist order ID watermark across restarts ─────────────
+  const std::string seqFile = config_->GetConfig().ORDER_SEQ_FILE;
+  if (!seqFile.empty()) {
+    std::ifstream sf(seqFile);
+    long persisted = 0;
+    if (sf >> persisted) {
+      orderSeq_ = persisted;
+      std::cout << "[Strategy] Resumed order sequence from " << seqFile
+                << " at " << persisted << "\n";
+    }
+  }
 
   InitializeInstruments();
 
@@ -32,14 +42,29 @@ Strategy::Strategy(std::shared_ptr<hermes::ContractManager> cm,
   workerThread_ = std::thread(&Strategy::WorkerLoop, this);
 
 #ifdef HAS_HERMES_TRADER
+  // ── Startup confirmation ──────────────────────────────────────────────────
+  const auto& eng = config_->GetConfig().EXECUTION_ENGINE;
+  const bool dryRun = config_->GetConfig().TRADE_DRY_RUN;
+  std::cout << "[Strategy] HAS_HERMES_TRADER is DEFINED."
+            << " Engine=" << eng
+            << " DryRun=" << (dryRun ? "true" : "false") << "\n";
+
   int poolSize = config_->GetConfig().EXECUTION_POOL_SIZE;
   for (int i = 0; i < poolSize; ++i) {
     executionPool_.emplace_back(&Strategy::ExecutionWorkerLoop, this, i);
   }
+  std::cout << "[Strategy] ExecutionPool started: " << poolSize << " threads.\n";
 #endif
 }
 
 Strategy::~Strategy() {
+  // ── Persist final sequence watermark before signalling threads ───────────
+  const std::string seqFile = config_->GetConfig().ORDER_SEQ_FILE;
+  if (!seqFile.empty()) {
+    std::ofstream sf(seqFile, std::ios::trunc);
+    sf << orderSeq_.load() << "\n";
+  }
+
   running_ = false;
   logCv_.notify_all();
 #ifdef HAS_HERMES_TRADER
@@ -197,15 +222,57 @@ void Strategy::ExecutionWorkerLoop(int id) {
 }
 
 void Strategy::ExecuteStrategy(const TradeContext &ctx) {
-  // TODO: Phase-based execution logic
-  // Place Anchor Leg → Poll → Place Hedge Leg → DPR Fallback
+  auto cfg = config_->GetConfig();
+  std::stringstream trace;
+  auto start = std::chrono::high_resolution_clock::now();
+  auto TRACE = [&](const std::string &msg) {
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::high_resolution_clock::now() - start).count();
+    trace << "[" << us << "us] " << msg << "\n";
+  };
+
+  // ── Phase 1: Submit all legs concurrently ─────────────────────────────────
+  TRACE("Phase 1: Submitting legs (engine=" + cfg.EXECUTION_ENGINE + ")");
+
+  // TODO: Build and submit your strategy's legs here.
+  // Example (replace with your actual TradeLeg construction):
+  //   char id1Buf[256] = {};
+  //   auto f1 = std::async(std::launch::async, [&]() {
+  //       return (PlaceOrder(&leg1, id1Buf, 256) > 0) ? std::string(id1Buf) : "";
+  //   });
+  //   std::string id1 = f1.get();
+  //   TRACE("Leg 1: " + (id1.empty() ? "FAILED (PlaceOrder returned 0)" : id1));
+
+  // ── Phase 2: Poll for fills ───────────────────────────────────────────────
+  TRACE("Phase 2: Polling fills");
+  // TODO: Poll IsOrderCompleted / IsOrderRejected per leg.
+  // Follow CR pattern: loop up to OPT_WAIT_MS with POLL_INTERVAL_MS steps.
+
+  // ── Phase 3: DPR fallback for unfilled legs ───────────────────────────────
+  TRACE("Phase 3: DPR fallback check");
+  // TODO: ModifyOrder to DPR price for any leg still open after OPT_WAIT_MS.
+
+  // ── Commit trace to log ───────────────────────────────────────────────────
+  PushToLog(LogEntry::TRACE_LOG, "=== EXECUTION CYCLE " + trace.str());
 }
 
 bool Strategy::IsOrderCompleted(const std::string &orderId) {
-  return false; // TODO: Implement HermesTrader Status Poll
+  if (orderId.empty()) return true; // Guard: empty ID = PlaceOrder failed, treat as done
+  char buf[8192] = {};
+  int len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
+  if (len <= 0) return false;
+  // TODO: Parse broker-specific "filled/traded/complete" status from buf.
+  // Example: return strstr(buf, "\"status\":\"filled\"") != nullptr;
+  return false;
 }
 
 bool Strategy::IsOrderRejected(const std::string &orderId) {
-  return false; // TODO: Implement HermesTrader Status Poll
+  if (orderId.empty()) return true; // Guard: empty ID = treat as rejected
+  char buf[8192] = {};
+  int len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
+  if (len <= 0) return false;
+  // TODO: Parse broker-specific "rejected" status from buf.
+  // Example: return strstr(buf, "\"status\":\"rejected\"") != nullptr;
+  return false;
 }
 #endif

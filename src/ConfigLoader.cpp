@@ -57,6 +57,7 @@ void ConfigLoader::Load() {
   config_.EXECUTION_MODE = hcfg.getString("EXECUTION_MODE", config_.EXECUTION_MODE);
   config_.EXECUTION_ENGINE = hcfg.getString("EXECUTION_ENGINE", config_.EXECUTION_ENGINE);
   config_.EXECUTION_POOL_SIZE = hcfg.getInt("EXECUTION_POOL_SIZE", config_.EXECUTION_POOL_SIZE);
+  config_.ORDER_SEQ_FILE = hcfg.getString("ORDER_SEQ_FILE", config_.ORDER_SEQ_FILE);
 
   config_.POLL_INTERVAL_MS = hcfg.getInt("POLL_INTERVAL_MS", config_.POLL_INTERVAL_MS);
   config_.LTT_RANGE = hcfg.getInt("LTT_RANGE", config_.LTT_RANGE);
