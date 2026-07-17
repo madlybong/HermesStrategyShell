@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1.1] - 2026-07-17
+### Fixed
+- Fixed submodule pointer synchronization issue. The v0.3.1.0 release accidentally shipped with outdated `extern/` pointers. Pointers for `HermesTrader`, `HermesPortal`, and `hermes_common` are now correctly tracking their respective updated tags.
+
 ## [0.3.1.0] - 2026-07-17
 ### Added
 - Integrated ImGui monitoring dashboard framework, accessible via the `--monitor` argument at runtime.
