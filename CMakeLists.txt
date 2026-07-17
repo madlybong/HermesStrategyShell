@@ -20,6 +20,8 @@ set(VCPKG_APPLOCAL_DEPS OFF CACHE BOOL "" FORCE)
 option(ENABLE_MSMQ "Enable MSMQ Support in HermesTrader" ON)
 option(ENABLE_LOCAL "Enable LocalExecutor in HermesTrader" ON)
 option(BUILD_MONITOR "Build the monitor dashboard" ON)
+option(ENABLE_IMGUI_MONITOR "Build with ImGui DX11 monitor" ON)
+option(BUILD_TESTING "Build the testing tree" ON)
 
 if(UNIX AND NOT APPLE)
     set(CMAKE_INSTALL_RPATH "$ORIGIN")
@@ -34,6 +36,7 @@ endif()
 
 # Source files
 file(GLOB SOURCES "src/*.cpp")
+list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ImGuiMonitor.cpp")
 if(WIN32)
     list(APPEND SOURCES ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 endif()
@@ -77,10 +80,30 @@ if(TARGET HermesTrader)
     endif()
 endif()
 
+if(ENABLE_IMGUI_MONITOR)
+    find_package(imgui CONFIG REQUIRED)
+    find_package(implot CONFIG REQUIRED)
+    target_link_libraries(HermesStrategyShell PRIVATE imgui::imgui implot::implot d3d11 dxgi)
+    target_compile_definitions(HermesStrategyShell PRIVATE ENABLE_IMGUI_MONITOR)
+    target_sources(HermesStrategyShell PRIVATE src/ImGuiMonitor.cpp)
+endif()
+
 find_package(Threads REQUIRED)
 
 target_link_libraries(HermesStrategyShell PRIVATE HermesPortal HermesTrader HermesCommon nlohmann_json::nlohmann_json Threads::Threads)
 target_include_directories(HermesStrategyShell PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extern/HermesPortal/include)
+
+if(BUILD_TESTING)
+    enable_testing()
+    find_package(Catch2 3 REQUIRED)
+    add_executable(tests tests/test_main.cpp)
+    target_link_libraries(tests PRIVATE Catch2::Catch2WithMain HermesCommon)
+    target_include_directories(tests PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
+    
+    # Catch2 test discovery
+    include(Catch)
+    catch_discover_tests(tests)
+endif()
 
 if(UNIX)
     target_link_libraries(HermesStrategyShell PRIVATE stdc++fs pthread)

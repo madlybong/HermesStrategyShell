@@ -1,5 +1,6 @@
 #pragma once
 #include <HermesConfig.h>
+#include <ctime>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -28,10 +29,16 @@ struct AppConfig {
   int POLL_INTERVAL_MS = 500;
   int LTT_RANGE = 0;
   int MIN_SIGNAL_COOLDOWN_MIN = 1;
-  int FAR_WAIT_MS  = 60000;   // TODO: Remove if not needed (FutFut)
-  int NEAR_WAIT_MS = 5000;    // TODO: Remove if not needed (FutFut)
-  int FUT_WAIT_MS = 500;      // TODO: Remove if not needed (CR)
-  int OPT_WAIT_MS = 50;       // TODO: Remove if not needed (CR)
+  int FAR_WAIT_MS  = 60000;
+  int NEAR_WAIT_MS = 5000;
+  int FUT_WAIT_MS = 500;
+  int OPT_WAIT_MS = 50;
+  std::string ENTRY_ORDER_TYPE = "LIMIT";
+
+  // === Trading Window ===
+  std::string TRADE_START = "";
+  std::string TRADE_STOP = "";
+  int STARTUP_WARMUP_SEC = 30;
 
   // === Charges ===
   double FIXED_STT = 0.9;
@@ -71,7 +78,32 @@ struct AppConfig {
   // === Logging ===
   std::string LOG_DIR_NAME = "strategy";
   std::string OP_LOG_HEADER = "";
+  int LOGGER_CORE = -1; // -1 = unpinned
 };
+
+// Returns true when the current local clock is within [TRADE_START, TRADE_STOP).
+// If either field is empty the window is considered unrestricted.
+inline bool IsWithinTradingWindow(const AppConfig& cfg) {
+  if (cfg.TRADE_START.empty() || cfg.TRADE_STOP.empty()) return true;
+  auto parseHHMM = [](const std::string& s) -> int {
+    if (s.size() < 5) return -1;
+    try {
+      int h = std::stoi(s.substr(0, 2));
+      int m = std::stoi(s.substr(3, 2));
+      return h * 60 + m;
+    } catch (...) { return -1; }
+  };
+  int startMin = parseHHMM(cfg.TRADE_START);
+  int stopMin  = parseHHMM(cfg.TRADE_STOP);
+  if (startMin < 0 || stopMin < 0) return true; // malformed — fail open
+  std::time_t now_t = std::time(nullptr);
+  std::tm* lt = std::localtime(&now_t);
+  int nowMin = lt->tm_hour * 60 + lt->tm_min;
+  if (startMin <= stopMin)
+    return nowMin >= startMin && nowMin < stopMin;
+  // Overnight wrap-around (e.g. 22:00 - 06:00)
+  return nowMin >= startMin || nowMin < stopMin;
+}
 
 class ConfigLoader {
 public:

@@ -1,5 +1,18 @@
 {
   "name": "hermesstrategyshell",
   "version-string": "0.3.0.0",
-  "dependencies": ["curl", "lzo", "nlohmann-json", "uwebsockets", "cppzmq", "sqlite3"]
+  "dependencies": [
+    "curl",
+    "lzo",
+    "nlohmann-json",
+    "uwebsockets",
+    "cppzmq",
+    "sqlite3",
+    "catch2",
+    {
+        "name": "imgui",
+        "features": ["dx11-binding", "win32-binding", "docking-experimental"]
+    },
+    "implot"
+  ]
 }

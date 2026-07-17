@@ -29,10 +29,16 @@
 ## 9. Performance Architecture
 [O(1) hot path design, lock-free patterns used]
 
-## 10. Configuration Reference
+## 10. State Persistence (OrderState / PositionState)
+[Document how multi-leg positions are tracked (e.g. `PositionLeg` parameters), and which symbols are monitored by `OrderState`.]
+
+## 11. Testing & Validation
+[List Catch2 unit test coverage scenarios to validate logic before going live.]
+
+## 12. Configuration Reference
 [Table of all .env keys specific to this strategy]
 
-## 11. Component Map
+## 13. Component Map
 [List of executables, data files, their roles]
 
 ---
@@ -45,3 +51,4 @@ When implementing `ExecuteStrategy`:
 3. **Never** use `std::endl` inside TRACE — use `"\n"` (TRACE accumulates in stringstream)
 4. **Always** push the final trace: `PushToLog(LogEntry::TRACE_LOG, "=== EXECUTION CYCLE " + trace.str())`
 5. **Guard** `IsOrderCompleted`/`IsOrderRejected` against empty orderId — return true immediately
+6. **Track** the final execution data to `PositionState::Instance()` ensuring trade continuity across restarts.

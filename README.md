@@ -24,6 +24,17 @@ A GitHub Template Repository for bootstrapping C++20 High-Frequency Trading stra
 ./build.sh
 ```
 
+### Running the TUI / Dashboard
+By default, the strategy shell runs headlessly, printing minimal status ticks to the console.
+- Run with `--debug` to enable the TUI (Text User Interface) for detailed stdout diagnostic logs.
+- Run with `--monitor` to launch the ImGui DX11 visual dashboard (Windows only).
+
+### Running Tests
+The strategy shell integrates with Catch2 for unit testing.
+```bash
+run_tests.bat
+```
+
 ## Architecture Summary
 
 - **Event Loop**: Powered by `HermesPortal` via `IListener::onMarketTick`.

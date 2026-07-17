@@ -8,14 +8,21 @@
 #include <thread>
 #include <vector>
 
+#ifdef ENABLE_IMGUI_MONITOR
+#include "ImGuiMonitor.h"
+#endif
+
 int main(int argc, char *argv[]) {
   bool debugMode = false;
+  bool monitorMode = false;
   for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]) == "--debug") { debugMode = true; break; }
+    if (std::string(argv[i]) == "--debug") { debugMode = true; }
+    if (std::string(argv[i]) == "--monitor") { monitorMode = true; }
   }
 
   std::cout << "[HSS] HermesStrategyShell v" << HSS_VERSION 
-            << (debugMode ? " (DEBUG MODE)" : "") << "...\n";
+            << (debugMode ? " (DEBUG MODE)" : "") 
+            << (monitorMode ? " (MONITOR MODE)" : "") << "...\n";
 
   auto config = std::make_shared<ConfigLoader>(".env");
   AppConfig appCfg = config->GetConfig();
@@ -56,6 +63,16 @@ int main(int argc, char *argv[]) {
   std::cout << "Connecting to Portal...\n";
   portal->Start(cfg);
   std::cout << "Running... Press Ctrl+C to stop.\n";
+
+#ifdef ENABLE_IMGUI_MONITOR
+  if (monitorMode) {
+    ImGuiMonitor monitor(strategy.get(), config);
+    monitor.Run();  // Blocking — Win32 message loop runs on main thread
+    portal->Stop();
+    Hermes::Portal::Destroy(portal);
+    return 0;
+  }
+#endif
 
   int ticks = 0, tuiTick = 0;
   while (true) {

@@ -26,16 +26,22 @@ Never propose or execute changes to any file under extern/.
 - Stale tick guard: LTT_RANGE check before processing any signal
 - High-water mark: order ID persisted to hermes_refno.seq — never reset without deliberate bump
 
-## 6. Build Environment [STRICT]
+## 6. Build & Test Environment [STRICT]
 Windows: always build via Git Bash
   & "C:\Program Files\Git\bin\bash.exe" build.sh
 Linux: ./build.sh
 Never invoke cmake directly without the wrapper script.
 Flags: --clean, --debug, --no-msmq, --no-local, --monitor
 
-## 7. Version Management
+**Testing**: You MUST run `run_tests.bat` and ensure 100% test pass rates before declaring a build successful.
+
+## 7. State Management
+- Utilize `PositionState` for any multi-leg entry and exit execution logic rather than maintaining bare ad-hoc arrays.
+- Track independent leg margins, costs, and PnL through the `TradeRecord` architecture.
+
+## 8. Version Management
 The VERSION file is the single source of truth.
 To bump: edit VERSION → commit → tag vX.Y.Z.W
 build.sh auto-stamps vcpkg.json. Never edit vcpkg.json version-string manually.
 
-## 8. Strategy-Specific Rules [TODO: Fill in]
+## 9. Strategy-Specific Rules [TODO: Fill in]

@@ -66,6 +66,11 @@ void ConfigLoader::Load() {
   config_.NEAR_WAIT_MS = hcfg.getInt("NEAR_WAIT_MS", config_.NEAR_WAIT_MS);
   config_.FUT_WAIT_MS = hcfg.getInt("FUT_WAIT_MS", config_.FUT_WAIT_MS);
   config_.OPT_WAIT_MS = hcfg.getInt("OPT_WAIT_MS", config_.OPT_WAIT_MS);
+  config_.ENTRY_ORDER_TYPE = hcfg.getString("ENTRY_ORDER_TYPE", config_.ENTRY_ORDER_TYPE);
+
+  config_.TRADE_START = hcfg.getString("TRADE_START", config_.TRADE_START);
+  config_.TRADE_STOP = hcfg.getString("TRADE_STOP", config_.TRADE_STOP);
+  config_.STARTUP_WARMUP_SEC = hcfg.getInt("STARTUP_WARMUP_SEC", config_.STARTUP_WARMUP_SEC);
 
   config_.FIXED_STT = hcfg.getDouble("FIXED_STT", config_.FIXED_STT);
   config_.FUTURE_CHARGES = hcfg.getDouble("FUTURE_CHARGES", config_.FUTURE_CHARGES);
@@ -104,4 +109,5 @@ void ConfigLoader::Load() {
   // Logging
   config_.LOG_DIR_NAME = hcfg.getString("LOG_DIR_NAME", config_.LOG_DIR_NAME);
   config_.OP_LOG_HEADER = hcfg.getString("OP_LOG_HEADER", config_.OP_LOG_HEADER);
+  config_.LOGGER_CORE = hcfg.getInt("LOGGER_CORE", config_.LOGGER_CORE);
 }
