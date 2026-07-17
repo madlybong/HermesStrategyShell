@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.17)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" _ver_raw)
 string(STRIP "${_ver_raw}" _ver)
 
-project(HermesStrategyShell VERSION ${_ver} LANGUAGES CXX)
+project(HermesFutCashStrategy VERSION ${_ver} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,10 +42,10 @@ if(WIN32)
 endif()
 
 # Add Executable
-add_executable(HermesStrategyShell ${SOURCES})
+add_executable(HermesFutCashStrategy ${SOURCES})
 
 # Include directories
-target_include_directories(HermesStrategyShell PRIVATE 
+target_include_directories(HermesFutCashStrategy PRIVATE 
     include 
     ${CMAKE_CURRENT_BINARY_DIR}
 )
@@ -83,20 +83,21 @@ endif()
 if(ENABLE_IMGUI_MONITOR)
     find_package(imgui CONFIG REQUIRED)
     find_package(implot CONFIG REQUIRED)
-    target_link_libraries(HermesStrategyShell PRIVATE imgui::imgui implot::implot d3d11 dxgi)
-    target_compile_definitions(HermesStrategyShell PRIVATE ENABLE_IMGUI_MONITOR)
-    target_sources(HermesStrategyShell PRIVATE src/ImGuiMonitor.cpp)
+    target_link_libraries(HermesFutCashStrategy PRIVATE imgui::imgui implot::implot d3d11 dxgi)
+    target_compile_definitions(HermesFutCashStrategy PRIVATE ENABLE_IMGUI_MONITOR)
+    target_sources(HermesFutCashStrategy PRIVATE src/ImGuiMonitor.cpp)
 endif()
 
 find_package(Threads REQUIRED)
 
-target_link_libraries(HermesStrategyShell PRIVATE HermesPortal HermesTrader HermesCommon nlohmann_json::nlohmann_json Threads::Threads)
-target_include_directories(HermesStrategyShell PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extern/HermesPortal/include)
+target_link_libraries(HermesFutCashStrategy PRIVATE HermesPortal HermesTrader HermesCommon nlohmann_json::nlohmann_json Threads::Threads)
+target_include_directories(HermesFutCashStrategy PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extern/HermesPortal/include)
 
 if(BUILD_TESTING)
     enable_testing()
     find_package(Catch2 3 REQUIRED)
-    add_executable(tests tests/test_main.cpp)
+    file(GLOB TEST_SOURCES "tests/*.cpp")
+    add_executable(tests ${TEST_SOURCES})
     target_link_libraries(tests PRIVATE Catch2::Catch2WithMain HermesCommon)
     target_include_directories(tests PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
     
@@ -106,10 +107,10 @@ if(BUILD_TESTING)
 endif()
 
 if(UNIX)
-    target_link_libraries(HermesStrategyShell PRIVATE stdc++fs pthread)
+    target_link_libraries(HermesFutCashStrategy PRIVATE stdc++fs pthread)
 endif()
 
-target_compile_definitions(HermesStrategyShell PRIVATE HAS_HERMES_TRADER)
+target_compile_definitions(HermesFutCashStrategy PRIVATE HAS_HERMES_TRADER)
 
 find_library(LZO_LIBRARY NAMES lzo2 lzo)
 find_package(CURL REQUIRED)
@@ -125,7 +126,7 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/dist/hermes_strategy_shell_${PLATFORM}" CACHE PATH "Default install prefix" FORCE)
 endif()
 
-install(TARGETS HermesStrategyShell RUNTIME DESTINATION .)
+install(TARGETS HermesFutCashStrategy RUNTIME DESTINATION .)
 
 install(FILES 
     $<TARGET_FILE:HermesPortal>
@@ -173,3 +174,5 @@ if(NOT EXISTS "${SEQ_FILE}")
   file(WRITE "${SEQ_FILE}" "0\n")
 endif()
 install(FILES "${SEQ_FILE}" DESTINATION .)
+
+

@@ -40,14 +40,25 @@ struct AppConfig {
   std::string TRADE_STOP = "";
   int STARTUP_WARMUP_SEC = 30;
 
+  // === CashFut Strategy Params ===
+  std::string EXPIRY = "";
+  double MIN_ROI_PCT = 0.50;
+  double SLIPPAGE_POINTS = 2.0;
+
   // === Charges ===
-  double FIXED_STT = 0.9;
-  double FUTURE_CHARGES = 1500.0;
-  double OPTION_CHARGES = 13000.0;
-  double INTEREST_CHARGES = 0.12;
-  double INTEREST_MARGIN_BASE = 80000.0;
-  double INDEX_FUT_MULTIPLIER = 2.0;
-  double STOCK_FUT_MULTIPLIER = 2.0;
+  double FUTURE_CHARGES = 3000.0;
+  double EQUITY_STT_BUY_PCT = 0.1;
+  double EQUITY_STT_SELL_PCT = 0.1;
+  double EQUITY_EXCHANGE_FEE = 33.5;
+  double EQUITY_SEBI_FEE = 1.0;
+  double EQUITY_STAMP_DUTY = 15.0;
+
+  double MARGIN_PER_TRADE = 500000.0;
+  double EXIT_PROFIT_PCT = 50.0;
+  double STOP_LOSS_PCT = 80.0;
+  int TIME_EXIT_DAYS = 3;
+  int EXIT_REPRICE_WAIT_MS = 10000;
+  int CASH_WAIT_MS = 5000;
 
   // === Engines: GreekSoft ===
   std::string GREEKSOFT_HOST = "127.0.0.1";

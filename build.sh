@@ -71,7 +71,7 @@ run_wizard() {
     _wiz_header() {
         printf "${C_CYAN}${C_BOLD}"
         printf "╬═══════════════════════════════════════════════════════════╪\n"
-        printf "║  HermesStrategyShell Build Wizard                      ║\n"
+        printf "║  HermesFutCashStrategy Build Wizard                      ║\n"
         printf "╚═══════════════════════════════════════════════════════════╝\n"
         printf "${C_RESET}\n"
     }
@@ -84,7 +84,7 @@ run_wizard() {
         _wiz_header
         printf "${C_BOLD}Step 1/3${C_RESET} — Components to build\n"
         printf "${C_DIM}  Number = toggle  ·  a = all on  ·  n = all off  ·  Enter = confirm${C_RESET}\n\n"
-        printf "  [1]  $(_tick $_COMP_STRATEGY)  ${C_BOLD}Strategy${C_RESET}   — HermesStrategyShell + deps\n"
+        printf "  [1]  $(_tick $_COMP_STRATEGY)  ${C_BOLD}Strategy${C_RESET}   — HermesFutCashStrategy + deps\n"
         printf "  [2]  $(_tick $_COMP_MONITOR)  ${C_BOLD}Monitor${C_RESET}    — React UI + WS Server\n"
         echo ""
         printf "  ${C_DIM}>${C_RESET} "; read -r _sel
@@ -245,11 +245,11 @@ build_cmake_project() {
 }
 
 if [ "$BUILD_STRATEGY" = true ]; then
-    EXTRA_STRATEGY=()
+    EXTRA_STRATEGY=("-DENABLE_TESTS=OFF")
     if [ "$ENABLE_MSMQ" = true ]; then EXTRA_STRATEGY+=("-DENABLE_MSMQ=ON"); else EXTRA_STRATEGY+=("-DENABLE_MSMQ=OFF"); fi
     if [ "$ENABLE_LOCAL" = true ]; then EXTRA_STRATEGY+=("-DENABLE_LOCAL=ON"); else EXTRA_STRATEGY+=("-DENABLE_LOCAL=OFF"); fi
     if [ "$BUILD_MONITOR" = true ]; then EXTRA_STRATEGY+=("-DBUILD_MONITOR=ON"); else EXTRA_STRATEGY+=("-DBUILD_MONITOR=OFF"); fi
-    build_cmake_project "HermesStrategyShell" "$SCRIPT_DIR/build" true "${EXTRA_STRATEGY[@]}"
+    build_cmake_project "HermesFutCashStrategy" "$SCRIPT_DIR/build" true "${EXTRA_STRATEGY[@]}"
 fi
 
 # Note: The monitor could also be built as a separate project if desired, but here we just pass the flag.

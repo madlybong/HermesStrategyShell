@@ -46,7 +46,7 @@ void PositionState::Load() {
             if (f.is_open()) {
                 nlohmann::json j;
                 f >> j;
-                history_ = j.get<std::vector<TradeRecord>>();
+                history_ = j.get<std::vector<CashFutTradeRecord>>();
                 std::cout << "[PositionState] Loaded " << history_.size() << " trade history records.\n";
             }
         } catch (const std::exception& e) {

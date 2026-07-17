@@ -1,16 +1,14 @@
-# Hermes Strategy Shell
+# HermesFutCashStrategy
 
-A GitHub Template Repository for bootstrapping C++20 High-Frequency Trading strategies on the Hermes architecture.
+A C++20 High-Frequency Trading strategy for executing Cash vs Futures arbitrage on the Hermes architecture.
 
 ## Getting Started
 
-1. Click **Use this template** on GitHub to create a new strategy repository.
-2. Clone your new repository.
-3. Run `git submodule update --init` to pull the `extern/` dependencies (`HermesPortal`, `HermesTrader`, `HermesCommon`).
-4. Read `.agents/SKILLS.md` and `.agents/RULES.md` for architectural constraints.
-5. Define your strategy logic in `STRATEGY.md`.
-6. Implement in `src/Strategy.cpp`.
-7. Configure in `env.example` (and copy to `.env`).
+1. Clone your repository.
+2. Run `git submodule update --init` to pull the `extern/` dependencies (`HermesPortal`, `HermesTrader`, `HermesCommon`).
+3. Read `.agents/SKILLS.md` and `.agents/RULES.md` for architectural constraints.
+4. Read `STRATEGY.md` for mathematical models and signal gating logic.
+5. Configure in `env.example` (and copy to `.env`). Ensure you set valid portal credentials and charge factors.
 
 ## Building
 
@@ -25,12 +23,11 @@ A GitHub Template Repository for bootstrapping C++20 High-Frequency Trading stra
 ```
 
 ### Running the TUI / Dashboard
-By default, the strategy shell runs headlessly, printing minimal status ticks to the console.
-- Run with `--debug` to enable the TUI (Text User Interface) for detailed stdout diagnostic logs.
-- Run with `--monitor` to launch the ImGui DX11 visual dashboard (Windows only).
+By default, the strategy runs headlessly, printing minimal status ticks to the console.
+- Run with `--monitor` to launch the ImGui DX11 visual dashboard (Windows only). This dashboard dynamically computes Live Net PnL and Expected Final PnL.
 
 ### Running Tests
-The strategy shell integrates with Catch2 for unit testing.
+The strategy integrates with Catch2 for unit testing the arbitrage spread calculations and charge models.
 ```bash
 run_tests.bat
 ```
@@ -38,6 +35,6 @@ run_tests.bat
 ## Architecture Summary
 
 - **Event Loop**: Powered by `HermesPortal` via `IListener::onMarketTick`.
-- **Execution**: Dispatched to `HermesTrader` lock-free queues.
+- **Execution**: Dispatched to `HermesTrader` lock-free SPSC queues. Anchor legs are filled sequentially before Hedging.
 - **Config**: Live-reloaded via `ConfigLoader`.
-- **Docs**: Centralized in `.agents/` for both human and AI reference.
+- **Dashboard**: `ImGuiMonitor` visualizes the active `marketStore_` states.

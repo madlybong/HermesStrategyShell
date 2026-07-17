@@ -44,4 +44,8 @@ The VERSION file is the single source of truth.
 To bump: edit VERSION → commit → tag vX.Y.Z.W
 build.sh auto-stamps vcpkg.json. Never edit vcpkg.json version-string manually.
 
-## 9. Strategy-Specific Rules [TODO: Fill in]
+## 9. Strategy-Specific Rules (HermesFutOptStrategy)
+- **Bid/Ask Spread Execution:** ALWAYS read depths (bid/ask) instead of LTP to simulate executable opportunities.
+- **Slippage Modeling:** Apply a strict 4-point penalty per leg per trade to offset realistic market impact.
+- **Sequential Leg Fills (Anchor First):** For Forward arbitrage, the Futures leg (NSE:FO) is always executed first. The Cash leg (NSE:EQ) follows only if the Futures fill succeeds.
+- **ROI Gating:** Margin requirements are 100% upfront for cash, 20% for futures. Only issue `ENTER` if Expected ROI >= MIN_ROI_PERCENT.

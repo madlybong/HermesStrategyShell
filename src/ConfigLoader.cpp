@@ -72,13 +72,23 @@ void ConfigLoader::Load() {
   config_.TRADE_STOP = hcfg.getString("TRADE_STOP", config_.TRADE_STOP);
   config_.STARTUP_WARMUP_SEC = hcfg.getInt("STARTUP_WARMUP_SEC", config_.STARTUP_WARMUP_SEC);
 
-  config_.FIXED_STT = hcfg.getDouble("FIXED_STT", config_.FIXED_STT);
+  config_.EXPIRY = hcfg.getString("EXPIRY", config_.EXPIRY);
+  config_.MIN_ROI_PCT = hcfg.getDouble("MIN_ROI_PCT", config_.MIN_ROI_PCT);
+  config_.SLIPPAGE_POINTS = hcfg.getDouble("SLIPPAGE_POINTS", config_.SLIPPAGE_POINTS);
+
   config_.FUTURE_CHARGES = hcfg.getDouble("FUTURE_CHARGES", config_.FUTURE_CHARGES);
-  config_.OPTION_CHARGES = hcfg.getDouble("OPTION_CHARGES", config_.OPTION_CHARGES);
-  config_.INTEREST_CHARGES = hcfg.getDouble("INTEREST_CHARGES", config_.INTEREST_CHARGES);
-  config_.INTEREST_MARGIN_BASE = hcfg.getDouble("INTEREST_MARGIN_BASE", config_.INTEREST_MARGIN_BASE);
-  config_.INDEX_FUT_MULTIPLIER = hcfg.getDouble("INDEX_FUT_MULTIPLIER", config_.INDEX_FUT_MULTIPLIER);
-  config_.STOCK_FUT_MULTIPLIER = hcfg.getDouble("STOCK_FUT_MULTIPLIER", config_.STOCK_FUT_MULTIPLIER);
+  config_.EQUITY_STT_BUY_PCT = hcfg.getDouble("EQUITY_STT_BUY_PCT", config_.EQUITY_STT_BUY_PCT);
+  config_.EQUITY_STT_SELL_PCT = hcfg.getDouble("EQUITY_STT_SELL_PCT", config_.EQUITY_STT_SELL_PCT);
+  config_.EQUITY_EXCHANGE_FEE = hcfg.getDouble("EQUITY_EXCHANGE_FEE", config_.EQUITY_EXCHANGE_FEE);
+  config_.EQUITY_SEBI_FEE = hcfg.getDouble("EQUITY_SEBI_FEE", config_.EQUITY_SEBI_FEE);
+  config_.EQUITY_STAMP_DUTY = hcfg.getDouble("EQUITY_STAMP_DUTY", config_.EQUITY_STAMP_DUTY);
+
+  config_.MARGIN_PER_TRADE = hcfg.getDouble("MARGIN_PER_TRADE", config_.MARGIN_PER_TRADE);
+  config_.EXIT_PROFIT_PCT = hcfg.getDouble("EXIT_PROFIT_PCT", config_.EXIT_PROFIT_PCT);
+  config_.STOP_LOSS_PCT = hcfg.getDouble("STOP_LOSS_PCT", config_.STOP_LOSS_PCT);
+  config_.TIME_EXIT_DAYS = hcfg.getInt("TIME_EXIT_DAYS", config_.TIME_EXIT_DAYS);
+  config_.EXIT_REPRICE_WAIT_MS = hcfg.getInt("EXIT_REPRICE_WAIT_MS", config_.EXIT_REPRICE_WAIT_MS);
+  config_.CASH_WAIT_MS = hcfg.getInt("CASH_WAIT_MS", config_.CASH_WAIT_MS);
 
   // GreekSoft
   config_.GREEKSOFT_HOST = hcfg.getString("GREEK_API_HOST", config_.GREEKSOFT_HOST);

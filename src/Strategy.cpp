@@ -1,116 +1,691 @@
 #include "Strategy.h"
 #include "ConfigLoader.h"
+#include "Utils.h"
 #include "Utils/PinThread.h"
-#include <chrono>
-#include <ctime>
+#include "OrderState.h"
+#include "PositionState.h"
+#include "ImGuiMonitor.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <iomanip>
+#include <nlohmann/json.hpp>
 #include <sstream>
 
-using namespace std::chrono;
+using json = nlohmann::json;
+namespace fs = std::filesystem;
 
-Strategy::Strategy(std::shared_ptr<hermes::ContractManager> cm,
-                   std::shared_ptr<ConfigLoader> config)
+static std::time_t parseExpiry(const std::string& s) {
+    std::tm tm{};
+    memset(&tm, 0, sizeof(tm));
+    if (s.length() == 9) { // DDMMMYYYY
+        try {
+            int day = std::stoi(s.substr(0, 2));
+            std::string mon = s.substr(2, 3);
+            int year = std::stoi(s.substr(5, 4));
+            tm.tm_mday = day;
+            tm.tm_year = year - 1900;
+            const char* months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+            for (int i = 0; i < 12; ++i) {
+                if (mon == months[i]) {
+                    tm.tm_mon = i;
+                    break;
+                }
+            }
+        } catch (...) {}
+    }
+    tm.tm_hour = 15;
+    tm.tm_min = 30;
+    tm.tm_sec = 0;
+    tm.tm_isdst = -1;
+    return std::mktime(&tm);
+}
+
+#ifdef HAS_HERMES_TRADER
+#include "HermesTrader.h"
+#endif
+
+Strategy::Strategy(std::shared_ptr<hermes::ContractManager> cm, std::shared_ptr<ConfigLoader> config)
     : cm_(cm), config_(config), running_(true) {
 
-  // TODO: Allocate the market store based on the max token ID in contract.csv
-  marketStoreSize_ = 200000; 
-  marketStore_ = std::make_unique<MarketSnapshot[]>(marketStoreSize_);
-  activeLocks_ = std::make_unique<std::atomic<uint8_t>[]>(marketStoreSize_);
-  pairCooldownNs_ = std::make_unique<std::atomic<int64_t>[]>(marketStoreSize_);
+  AppConfig cfg = config_->GetConfig();
 
-  for (size_t i = 0; i < marketStoreSize_; ++i) {
-    activeLocks_[i].store(0);
-    pairCooldownNs_[i].store(0);
+#ifdef HAS_HERMES_TRADER
+  std::cout << "[Strategy] HAS_HERMES_TRADER is DEFINED.\n";
+  std::string execModeRaw = cfg.EXECUTION_MODE;
+  std::string execEngine = cfg.EXECUTION_ENGINE;
+
+  int status = 0;
+  if (execEngine == "local") {
+    status = InitializeTrader("", "", "", cfg.TRADE_DRY_RUN ? 1 : 0,
+                              "", "", execModeRaw.c_str(), execEngine.c_str());
+    std::cout << "[Strategy] LocalExecutor InitializeTrader status=" << status << "\n";
+  } else {
+    // Only LocalExecutor supported natively for CashFut Phase 1 without external integration
+    status = InitializeTrader("", "", "", cfg.TRADE_DRY_RUN ? 1 : 0, "", "", execModeRaw.c_str(), execEngine.c_str());
   }
 
-  // ── Sequence file: persist order ID watermark across restarts ─────────────
-  const std::string seqFile = config_->GetConfig().ORDER_SEQ_FILE;
-  if (!seqFile.empty()) {
-    std::ifstream sf(seqFile);
-    long persisted = 0;
-    if (sf >> persisted) {
-      orderSeq_ = persisted;
-      std::cout << "[Strategy] Resumed order sequence from " << seqFile
-                << " at " << persisted << "\n";
+  if (status == 0) {
+    if (cfg.TRADE_DRY_RUN) {
+      std::cerr << "[CRITICAL] Trader initialization FAILED. Continuing in VIEW-ONLY mode.\n";
+    } else {
+      throw std::runtime_error("Trader initialization FAILED. Aborting because TRADE_DRY_RUN=false.");
+    }
+  } else {
+    SetLimitPolicy(1);
+    std::cout << "[Strategy] Trader Initialized Successfully.\n";
+  }
+
+  const int poolSize = std::max(4, cfg.EXECUTION_POOL_SIZE);
+  for (int i = 0; i < poolSize; ++i) executionPool_.emplace_back(&Strategy::ExecutionWorkerLoop, this, i);
+#endif
+
+  int maxIdx = cm_->GetMaxIndex();
+  marketStoreSize_ = maxIdx;
+  marketStore_ = std::make_unique<MarketSnapshot[]>(maxIdx);
+  activePairs_ = std::make_unique<std::atomic<uint8_t>[]>(maxIdx);
+  pairCooldownNs_ = std::make_unique<std::atomic<int64_t>[]>(maxIdx);
+  rejectedCooldownNs_ = std::make_unique<std::atomic<int64_t>[]>(maxIdx);
+  pairLockTimeNs_ = std::make_unique<std::atomic<int64_t>[]>(maxIdx);
+  isFutureTick_ = std::make_unique<bool[]>(maxIdx);
+  isCashTick_ = std::make_unique<bool[]>(maxIdx);
+
+  for (size_t i = 0; i < maxIdx; ++i) {
+    activePairs_[i] = 0;
+    pairCooldownNs_[i] = 0;
+    rejectedCooldownNs_[i] = 0;
+    pairLockTimeNs_[i] = 0;
+    isFutureTick_[i] = false;
+    isCashTick_[i] = false;
+  }
+  
+  startTime_ = std::chrono::steady_clock::now();
+  expiryEpoch_ = parseExpiry(cfg.EXPIRY);
+  PositionState::Instance().Load();
+
+  const auto &groups = cm_->GetGroups();
+  for (int i = 0; i < maxIdx; ++i) {
+    auto contract = cm_->GetContractByIndex(i);
+    if (contract) {
+      marketStore_[i].contract = contract.get();
+      isFutureTick_[i] = (contract->type.find("FUT") != std::string::npos);
+      isCashTick_[i]   = (contract->type.find("EQ") != std::string::npos);
+      auto it = groups.find(contract->symbol);
+      if (it != groups.end()) marketStore_[i].group = it->second;
     }
   }
 
-  InitializeInstruments();
+  const auto &limits = cm_->GetSymbolLimits();
+  usedOrdersToday_ = OrderState::Load();
+  for (const auto &pair : limits) {
+    SetSymbolLimit(pair.first.c_str(), pair.second);
+    int used = 0;
+    auto uit = usedOrdersToday_.find(pair.first);
+    if (uit != usedOrdersToday_.end()) used = uit->second;
+    int remaining = std::max(0, pair.second - used);
+    symbolRemainingOrders_[pair.first] = remaining;
+    if (used > 0) AdjustSymbolLimit(pair.first.c_str(), -used);
+  }
+
+  InitializePairs();
 
   loggerThread_ = std::thread(&Strategy::LoggerWorkerLoop, this);
   workerThread_ = std::thread(&Strategy::WorkerLoop, this);
+  std::ifstream SeqFile("hermes_refno.seq");
+  long loadedSeq = 1;
+  if (SeqFile.is_open()) SeqFile >> loadedSeq;
+  if (loadedSeq < 1 || loadedSeq > 32700) loadedSeq = 1;
+  
+  orderSeq_ = loadedSeq;
+  safeOrderMax_ = orderSeq_ + 500;
+  if (safeOrderMax_ > 32760) safeOrderMax_ = 32760;
 
-#ifdef HAS_HERMES_TRADER
-  // ── Startup confirmation ──────────────────────────────────────────────────
-  const auto& eng = config_->GetConfig().EXECUTION_ENGINE;
-  const bool dryRun = config_->GetConfig().TRADE_DRY_RUN;
-  std::cout << "[Strategy] HAS_HERMES_TRADER is DEFINED."
-            << " Engine=" << eng
-            << " DryRun=" << (dryRun ? "true" : "false") << "\n";
-
-  int poolSize = config_->GetConfig().EXECUTION_POOL_SIZE;
-  for (int i = 0; i < poolSize; ++i) {
-    executionPool_.emplace_back(&Strategy::ExecutionWorkerLoop, this, i);
-  }
-  std::cout << "[Strategy] ExecutionPool started: " << poolSize << " threads.\n";
-#endif
+  std::ofstream OutFile("hermes_refno.seq", std::ios::trunc);
+  if (OutFile.is_open()) OutFile << safeOrderMax_;
 }
 
 Strategy::~Strategy() {
-  // ── Persist final sequence watermark before signalling threads ───────────
-  const std::string seqFile = config_->GetConfig().ORDER_SEQ_FILE;
-  if (!seqFile.empty()) {
-    std::ofstream sf(seqFile, std::ios::trunc);
-    sf << orderSeq_.load() << "\n";
-  }
-
   running_ = false;
-  logCv_.notify_all();
 #ifdef HAS_HERMES_TRADER
-  poolCv_.notify_all();
+  { std::lock_guard<std::mutex> lock(poolMutex_); poolCv_.notify_all(); }
+  for (auto &t : executionPool_) { if (t.joinable()) t.join(); }
 #endif
+  { std::lock_guard<std::mutex> lock(logMutex_); logCv_.notify_all(); }
   if (loggerThread_.joinable()) loggerThread_.join();
   if (workerThread_.joinable()) workerThread_.join();
-  for (auto &t : executionPool_) {
-    if (t.joinable()) t.join();
+}
+
+void Strategy::InitializePairs() {
+  auto cfg = config_->GetConfig();
+  std::map<std::string, std::shared_ptr<hermes::ContractInfo>> eqContracts;
+  std::map<std::string, std::shared_ptr<hermes::ContractInfo>> futContracts;
+  
+  int maxIdx = cm_->GetMaxIndex();
+  for (int i = 0; i < maxIdx; ++i) {
+    auto c = cm_->GetContractByIndex(i);
+    if (c) {
+      if (c->type == "EQ") {
+          eqContracts[c->symbol] = c;
+      } else if (c->type.find("FUT") != std::string::npos && c->expiry == cfg.EXPIRY) {
+          futContracts[c->symbol] = c;
+      }
+    }
+  }
+
+  for (const auto &[sym, eqContract] : eqContracts) {
+    auto it = futContracts.find(sym);
+    if (it != futContracts.end()) {
+      auto futContract = it->second;
+      CashFutPair pair;
+      pair.symbol = sym;
+      pair.cashContract = eqContract;
+      pair.futContract = futContract;
+      pair.cashToken = eqContract->token;
+      pair.futToken = futContract->token;
+      pair.lotSize = futContract->lotSize;
+      pair.cashTradingSymbol = eqContract->tradingSymbol;
+      pair.futTradingSymbol = futContract->tradingSymbol;
+      pair.expiryEpochSec = expiryEpoch_;
+      
+      pairs_[sym] = pair;
+      pairSnapshots_[sym] = std::make_shared<CashFutSnapshot>();
+      
+      int ci = cm_->GetTokenIndex(pair.cashToken);
+      if (ci >= 0 && ci < (int)marketStoreSize_) marketStore_[ci].contract = pair.cashContract.get();
+      
+      int fi = cm_->GetTokenIndex(pair.futToken);
+      if (fi >= 0 && fi < (int)marketStoreSize_) marketStore_[fi].contract = pair.futContract.get();
+
+      std::cout << "[Strategy] Pair Found: " << sym << " (EQ: " << pair.cashToken << " vs FUT: " << pair.futToken << ")\n";
+    }
   }
 }
 
-void Strategy::InitializeInstruments() {
-  // TODO: Subscribe to relevant tokens / build lookup tables
-  // Example: g_underlyingBySymbol["NIFTY"] = 26000;
+void Strategy::WorkerLoop() {
+  Hermes::Utils::PinThreadToCore(2);
+#ifdef HAS_HERMES_TRADER
+  while (running_) {
+    auto ctxOpt = tradeQueue_.pop();
+    if (ctxOpt) {
+      std::lock_guard<std::mutex> lock(poolMutex_);
+      executionQueue_.push(*ctxOpt);
+      poolCv_.notify_one();
+    } else std::this_thread::yield();
+  }
+#endif
+}
+
+double Strategy::CalcEquityCharges(double cashPrice, int lotSize) {
+    auto cfg = config_->GetConfig();
+    double turnover = cashPrice * lotSize;
+    double stt = (turnover * cfg.EQUITY_STT_BUY_PCT / 100.0) + (turnover * cfg.EQUITY_STT_SELL_PCT / 100.0);
+    double exchange = 2 * (turnover * cfg.EQUITY_EXCHANGE_FEE / 10000000.0);
+    double sebi = 2 * (turnover * cfg.EQUITY_SEBI_FEE / 10000000.0);
+    double stamp = 2 * (turnover * cfg.EQUITY_STAMP_DUTY / 10000000.0);
+    return stt + exchange + sebi + stamp;
+}
+
+double Strategy::CalcFuturesCharges(double futPrice, int lotSize) {
+    auto cfg = config_->GetConfig();
+    double turnover = futPrice * lotSize;
+    return (turnover * 2) * (cfg.FUTURE_CHARGES / 10000000.0); // round trip
 }
 
 void Strategy::onMarketTick(const Hermes::MarketTick &tick) {
-  // TODO: Implement O(1) data ingestion into marketStore_
-  // Update LTP, bids, asks, timestamp
-  // Call ProcessSignal(symbol) if it's a target contract
+  int idx = cm_->GetTokenIndex(tick.token);
+  if (idx < 0 || idx >= (int)marketStoreSize_) return;
+
+  MarketSnapshot &snap = marketStore_[idx];
+  {
+    std::lock_guard<std::mutex> lock(snap.mtx);
+    if (tick.depthLevels > 0) {
+      for (int i = 0; i < std::min((int)tick.depthLevels, 5); ++i) {
+        snap.bids[i].p = tick.bidPrices[i] / 100.0; snap.bids[i].q = tick.bidQtys[i];
+        snap.asks[i].p = tick.askPrices[i] / 100.0; snap.asks[i].q = tick.askQtys[i];
+      }
+    }
+    if (tick.ltp > 0) snap.ltp = tick.ltp / 100.0;
+    if (tick.atp > 0) snap.atp = tick.atp / 100.0;
+    if (tick.exchangeTime > 0) snap.ltt = tick.exchangeTime;
+    if (tick.volume > 0) snap.volume = tick.volume;
+    if (tick.openInterest > 0) snap.openInterest = tick.openInterest;
+  }
+
+  
+  if (snap.contract) {
+      ProcessPair(snap.contract->symbol);
+  }
 }
 
-void Strategy::ProcessSignal(const std::string &symbol) {
-  // TODO: Implement entry/exit logic
-  // Read prices from marketStore_
-  // Calculate Diff/Gap and Expense
-  // If Threshold met: Push context to tradeQueue_
+void Strategy::ProcessPair(const std::string &symbol) {
+  auto it = pairs_.find(symbol);
+  if (it == pairs_.end()) return;
+  const CashFutPair &pair = it->second;
+
+  int ci = cm_->GetTokenIndex(pair.cashToken);
+  int fi = cm_->GetTokenIndex(pair.futToken);
+  if (ci < 0 || fi < 0) return;
+
+  auto snapIt = pairSnapshots_.find(symbol);
+  if (snapIt == pairSnapshots_.end()) return;
+  auto &diag = snapIt->second;
+
+  double cashB, cashA, futB, futA;
+  {
+    std::lock_guard<std::mutex> lock1(marketStore_[ci].mtx);
+    cashB = marketStore_[ci].bids[0].p; cashA = marketStore_[ci].asks[0].p;
+  }
+  {
+    std::lock_guard<std::mutex> lock2(marketStore_[fi].mtx);
+    futB = marketStore_[fi].bids[0].p; futA = marketStore_[fi].asks[0].p;
+  }
+
+  if (cashB <= 0 || cashA <= 0 || futB <= 0 || futA <= 0) return;
+
+  auto cfg = config_->GetConfig();
+  
+  std::lock_guard<std::mutex> diagLock(diag->mtx);
+  diag->cashBid = cashB; diag->cashAsk = cashA;
+  diag->futBid = futB; diag->futAsk = futA;
+  
+  diag->execSpread = futB - cashA;
+  diag->grossPnl = diag->execSpread * pair.lotSize;
+  diag->cashCharges = CalcEquityCharges(cashA, pair.lotSize);
+  diag->futCharges = CalcFuturesCharges(futB, pair.lotSize);
+  diag->slippage = cfg.SLIPPAGE_POINTS * 4 * pair.lotSize;
+  diag->netPnl = diag->grossPnl - diag->cashCharges - diag->futCharges - diag->slippage;
+  diag->roi = (diag->netPnl / cfg.MARGIN_PER_TRADE) * 100.0;
+  
+  diag->spreadPositive = (diag->execSpread > 0);
+  diag->roiPassed = (diag->roi >= cfg.MIN_ROI_PCT);
+  diag->signalValid = (diag->spreadPositive && diag->roiPassed);
+
+  auto& posState = PositionState::Instance();
+  auto lk = posState.Lock();
+  auto& positions = posState.Positions();
+  
+  if (positions.find(symbol) != positions.end()) {
+      EvaluateExit(symbol, pair, *diag);
+  } else {
+      EvaluateEntry(symbol, pair, *diag);
+  }
 }
 
-double Strategy::CalculateExpenses() {
-  // TODO: Implement expense model (Brokerage, STT, Interest)
-  return 0.0;
+bool Strategy::AcquirePairLock(int tokenIdx) {
+  uint8_t expected = 0;
+  return activePairs_[tokenIdx].compare_exchange_strong(expected, 1);
 }
+
+void Strategy::ReleasePairLock(int tokenIdx) {
+  activePairs_[tokenIdx].store(0);
+}
+
+void Strategy::EvaluateEntry(const std::string &symbol, const CashFutPair &pair, const CashFutSnapshot &snap) {
+  if (!snap.signalValid) return;
+  
+  auto cfg = config_->GetConfig();
+  if (!cfg.TRADE_ENABLED) return;
+  if (!IsWithinTradingWindow(cfg)) return;
+  
+  auto uptime = std::chrono::steady_clock::now() - startTime_;
+  if (std::chrono::duration_cast<std::chrono::seconds>(uptime).count() < cfg.STARTUP_WARMUP_SEC) return;
+  
+  int fi = cm_->GetTokenIndex(pair.futToken);
+  int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  
+  if (nowNs - pairCooldownNs_[fi].load(std::memory_order_relaxed) < (int64_t)cfg.MIN_SIGNAL_COOLDOWN_MIN * 60000000000LL) return;
+  if (nowNs - rejectedCooldownNs_[fi].load(std::memory_order_relaxed) < 5000000000LL) return; // 5s backoff
+
+  int rem = 0;
+  {
+    std::lock_guard<std::mutex> lk(ordersMutex_);
+    if (symbolRemainingOrders_.find(symbol) != symbolRemainingOrders_.end()) {
+      rem = symbolRemainingOrders_[symbol];
+    }
+  }
+  if (rem < 2) return;
+
+  if (AcquirePairLock(fi)) {
+#ifdef HAS_HERMES_TRADER
+    CashFutTradeContext ctx;
+    ctx.symbol = symbol;
+    ctx.action = TradeAction::ENTRY;
+    ctx.direction = "FORWARD";
+    ctx.spread = snap.execSpread;
+    ctx.netExpense = snap.cashCharges + snap.futCharges;
+    ctx.cashToken = pair.cashToken;
+    ctx.futToken = pair.futToken;
+
+    // Anchor: Future Leg (SELL)
+    ctx.futLeg.exchangeToken = std::to_string(pair.futToken);
+    ctx.futLeg.symbol = pair.futTradingSymbol;
+    ctx.futLeg.side = 2; // SELL
+    ctx.futLeg.price = snap.futBid;
+    ctx.futLeg.numLots = 1;
+    ctx.futLeg.lotSize = pair.lotSize;
+    ctx.futLeg.strategyId = GenerateOrderId();
+    
+    // Hedge: Cash Leg (BUY)
+    ctx.cashLeg.exchangeToken = std::to_string(pair.cashToken);
+    ctx.cashLeg.symbol = pair.cashTradingSymbol;
+    ctx.cashLeg.side = 1; // BUY
+    ctx.cashLeg.price = snap.cashAsk;
+    ctx.cashLeg.numLots = 1;
+    ctx.cashLeg.lotSize = pair.lotSize;
+    ctx.cashLeg.strategyId = GenerateOrderId();
+
+    {
+      std::lock_guard<std::mutex> lk(ordersMutex_);
+      symbolRemainingOrders_[symbol] -= 2; AdjustSymbolLimit(symbol.c_str(), -2);
+      usedOrdersToday_[symbol] += 2; OrderState::Save(usedOrdersToday_);
+    }
+
+    tradeQueue_.push(ctx);
+    pairLockTimeNs_[fi].store(nowNs, std::memory_order_relaxed);
+#endif
+  }
+}
+
+void Strategy::EvaluateExit(const std::string &symbol, const CashFutPair &pair, const CashFutSnapshot &snap) {
+  auto cfg = config_->GetConfig();
+  
+  auto& posState = PositionState::Instance();
+  auto lk = posState.Lock();
+  auto& positions = posState.Positions();
+  
+  auto it = positions.find(symbol);
+  if (it == positions.end()) return;
+  ActivePosition& activePos = it->second;
+  if (activePos.legs.empty()) return;
+  
+  CashFutPositionLeg& leg = activePos.legs.front();
+  
+  // Forward exit: Sell Cash at Bid, Buy Future at Ask
+  double exitCashBid = snap.cashBid;
+  double exitFutAsk = snap.futAsk;
+  
+  double cashPnl = (exitCashBid - leg.entry_cash_ask) * pair.lotSize;
+  double futPnl = (leg.entry_fut_bid - exitFutAsk) * pair.lotSize;
+  double grossPnl = cashPnl + futPnl;
+  
+  double exitCashCharges = CalcEquityCharges(exitCashBid, pair.lotSize); // rough estimate
+  double exitFutCharges = CalcFuturesCharges(exitFutAsk, pair.lotSize);
+  
+  double netPnl = grossPnl - leg.entry_charges - exitCashCharges - exitFutCharges;
+  
+  bool tpHit = (netPnl > cfg.MARGIN_PER_TRADE * (cfg.EXIT_PROFIT_PCT / 100.0) && netPnl > 0);
+  bool slHit = (netPnl <= -(cfg.MARGIN_PER_TRADE * (cfg.STOP_LOSS_PCT / 100.0)));
+  
+  std::time_t now = std::time(nullptr);
+  double daysToExpiry = std::difftime(pair.expiryEpochSec, now) / (60 * 60 * 24);
+  bool timeExitHit = (daysToExpiry <= cfg.TIME_EXIT_DAYS);
+  
+  if (tpHit || slHit || timeExitHit) {
+      int fi = cm_->GetTokenIndex(pair.futToken);
+      if (AcquirePairLock(fi)) {
+          lk.unlock();
+          
+#ifdef HAS_HERMES_TRADER
+          CashFutTradeContext ctx;
+          ctx.symbol = symbol;
+          ctx.action = TradeAction::EXIT;
+          ctx.direction = "FORWARD";
+          ctx.spread = 0;
+          ctx.cashToken = pair.cashToken;
+          ctx.futToken = pair.futToken;
+
+          // Anchor: Future Leg (BUY to cover)
+          ctx.futLeg.exchangeToken = std::to_string(pair.futToken);
+          ctx.futLeg.symbol = pair.futTradingSymbol;
+          ctx.futLeg.side = 1; // BUY
+          ctx.futLeg.price = snap.futAsk;
+          ctx.futLeg.numLots = 1;
+          ctx.futLeg.lotSize = pair.lotSize;
+          ctx.futLeg.strategyId = GenerateOrderId();
+          ctx.futLeg.isSqOff = true;
+          
+          // Hedge: Cash Leg (SELL to close)
+          ctx.cashLeg.exchangeToken = std::to_string(pair.cashToken);
+          ctx.cashLeg.symbol = pair.cashTradingSymbol;
+          ctx.cashLeg.side = 2; // SELL
+          ctx.cashLeg.price = snap.cashBid;
+          ctx.cashLeg.numLots = 1;
+          ctx.cashLeg.lotSize = pair.lotSize;
+          ctx.cashLeg.strategyId = GenerateOrderId();
+          ctx.cashLeg.isSqOff = true;
+          
+          tradeQueue_.push(ctx);
+#endif
+      }
+  }
+}
+
+void Strategy::ForceExitPosition(const std::string& symbol) {
+  // Manual intervention logic could go here
+}
+
+#ifdef HAS_HERMES_TRADER
+void Strategy::ExecutionWorkerLoop(int id) {
+  while (running_) {
+    CashFutTradeContext ctx;
+    {
+      std::unique_lock<std::mutex> lock(poolMutex_);
+      poolCv_.wait(lock, [&]() { return !running_ || !executionQueue_.empty(); });
+      if (!running_ && executionQueue_.empty()) break;
+      ctx = std::move(executionQueue_.front()); executionQueue_.pop();
+    }
+    ExecuteCashFutStrategy(ctx);
+  }
+}
+
+bool Strategy::IsOrderCompleted(const std::string &orderId) {
+  char buf[8192];
+  int len;
+  {
+    std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+    len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
+  }
+  if (len <= 0) return false;
+  if (strstr(buf, "\"order_status\":\"Traded\"")  || strstr(buf, "\"status\":\"filled\"") ||
+      strstr(buf, "\"order_status\":\"Complete\"") || strstr(buf, "\"Status\":\"Executed\"")) return true;
+  return false;
+}
+
+bool Strategy::IsOrderRejected(const std::string &orderId) {
+  char buf[8192];
+  int len;
+  {
+    std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+    len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
+  }
+  if (len <= 0) return false;
+  if (strstr(buf, "\"order_status\":\"Rejected\"") || strstr(buf, "\"status\":\"rejected\"")) return true;
+  return false;
+}
+
+double Strategy::FetchFillPrice(const std::string& orderId, double fallbackPrice) {
+    return fallbackPrice; // Simplification for paper mode
+}
+
+void Strategy::ExecuteCashFutStrategy(const CashFutTradeContext &ctx) {
+    auto cfg = config_->GetConfig();
+    std::stringstream trace; auto start = std::chrono::high_resolution_clock::now();
+    auto TRACE = [&](const std::string &msg) {
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count();
+        trace << "[" << us << "us] " << msg << "\n";
+    };
+    
+    TradeLeg futLeg = ctx.futLeg, cashLeg = ctx.cashLeg;
+    
+    auto GetDprPrice = [&](const TradeLeg &leg, bool isCash) {
+        double basePrice = leg.price;
+        double offsetPrice = (leg.side == 1) ? basePrice + 15.0 : basePrice - 15.0; // aggressive +15 pts
+        return std::round(std::max(0.05, offsetPrice) / 0.05) * 0.05;
+    };
+
+    if (ctx.action == TradeAction::EXIT) {
+        futLeg.price = GetDprPrice(futLeg, false);
+        cashLeg.price = GetDprPrice(cashLeg, true);
+    }
+    
+    auto releaseAndReturn = [&]() {
+        int fi = cm_->GetTokenIndex(ctx.futToken);
+        ReleasePairLock(fi);
+        PushToLog(LogEntry::TRACE_EXEC, "=== EXECUTION CYCLE " + trace.str());
+    };
+    
+    // Phase 1: Futures Leg
+    TRACE("Phase 1: Placing FUT order (Anchor, LIMIT) @ " + std::to_string(futLeg.price));
+    char futOrderIdBuf[256] = {}; std::string futOrderId = "";
+    int pollInterval = std::max(5, cfg.POLL_INTERVAL_MS);
+    
+    int futRc;
+    {
+        std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+        futRc = PlaceOrder(&futLeg, futOrderIdBuf, 256);
+    }
+    
+    if (futRc > 0) futOrderId = futOrderIdBuf;
+    else {
+        TRACE("FUT Order placement failed.");
+        int fi = cm_->GetTokenIndex(ctx.futToken);
+        int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        rejectedCooldownNs_[fi].store(nowNs, std::memory_order_relaxed);
+        releaseAndReturn(); return;
+    }
+    
+    bool futFilled = cfg.TRADE_DRY_RUN;
+    if (!futFilled) {
+        int futElapsed = 0, futWaitLimit = cfg.FUT_WAIT_MS;
+        while (futElapsed < futWaitLimit) {
+            if (IsOrderCompleted(futOrderId)) { futFilled = true; TRACE("FUT Filled"); break; }
+            if (IsOrderRejected(futOrderId)) { TRACE("FUT Rejected"); break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(pollInterval)); futElapsed += pollInterval;
+        }
+        
+        if (!futFilled) {
+            if (ctx.action == TradeAction::EXIT) {
+                // Keep trying to exit if it's an exit order
+            } else {
+                bool canceled;
+                {
+                    std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+                    canceled = CancelOrder(futOrderId.c_str());
+                }
+                TRACE("FUT Cancelled due to timeout.");
+                releaseAndReturn(); return;
+            }
+        }
+    }
+    
+    // Phase 2: Cash Leg
+    TRACE("Phase 2: Placing CASH order (Hedge, LIMIT) @ " + std::to_string(cashLeg.price));
+    char cashOrderIdBuf[256] = {}; std::string cashOrderId = "";
+    
+    int cashRc;
+    {
+        std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+        cashRc = PlaceOrder(&cashLeg, cashOrderIdBuf, 256);
+    }
+    
+    if (cashRc > 0) cashOrderId = cashOrderIdBuf;
+    
+    bool cashFilled = cfg.TRADE_DRY_RUN;
+    if (!cashFilled && cashRc > 0) {
+        int cashElapsed = 0, cashWaitLimit = cfg.CASH_WAIT_MS;
+        while (cashElapsed < cashWaitLimit) {
+            if (IsOrderCompleted(cashOrderId)) { cashFilled = true; TRACE("CASH Filled"); break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(pollInterval)); cashElapsed += pollInterval;
+        }
+        
+        if (!cashFilled) {
+            double freshDpr = GetDprPrice(cashLeg, true);
+            TRACE("CASH Timeout. Re-pricing to DPR @ " + std::to_string(freshDpr));
+            bool modified;
+            {
+                std::lock_guard<std::mutex> apiLock(traderApiMutex_);
+                modified = ModifyOrder(cashOrderId.c_str(), freshDpr, cashLeg.numLots * cashLeg.lotSize, cashLeg.numLots, "LIMIT");
+            }
+            if (modified) cashFilled = true; // Assumed fill at DPR
+        }
+    }
+    
+    if (ctx.action == TradeAction::ENTRY) {
+        auto& posState = PositionState::Instance();
+        auto lk = posState.Lock();
+        auto& positions = posState.Positions();
+        
+        CashFutPositionLeg leg;
+        leg.entry_cash_ask = cashLeg.price;
+        leg.entry_fut_bid = futLeg.price;
+        leg.entry_spread = ctx.spread;
+        leg.entry_charges = ctx.netExpense;
+        leg.margin_used = cfg.MARGIN_PER_TRADE;
+        leg.lot_size = cashLeg.lotSize;
+        leg.entry_time = "NOW"; // Use real time
+        
+        ActivePosition pos;
+        pos.symbol = ctx.symbol;
+        pos.direction = "FORWARD";
+        pos.legs.push_back(leg);
+        
+        positions[ctx.symbol] = pos;
+        posState.Save(lk);
+        TRACE("Saved active position.");
+    } else {
+        auto& posState = PositionState::Instance();
+        auto lk = posState.Lock();
+        auto& positions = posState.Positions();
+        auto& history = posState.History();
+        
+        auto it = positions.find(ctx.symbol);
+        if (it != positions.end()) {
+            CashFutTradeRecord rec;
+            rec.symbol = ctx.symbol;
+            rec.entry_cash_ask = it->second.legs.front().entry_cash_ask;
+            rec.entry_fut_bid = it->second.legs.front().entry_fut_bid;
+            rec.exit_cash_bid = cashLeg.price;
+            rec.exit_fut_ask = futLeg.price;
+            history.push_back(rec);
+            
+            positions.erase(it);
+            posState.Save(lk);
+            TRACE("Saved trade history and removed active position.");
+        }
+    }
+    
+    releaseAndReturn();
+}
+#endif
 
 long Strategy::GenerateOrderId() {
-  return ++orderSeq_;
+  long seq = ++orderSeq_;
+  if (seq >= safeOrderMax_) {
+      safeOrderMax_ = seq + 500;
+      std::ofstream OutFile("hermes_refno.seq", std::ios::trunc);
+      if (OutFile.is_open()) OutFile << safeOrderMax_;
+  }
+  return seq;
 }
 
-void Strategy::PrintTUI() const {
-  if (!debugMode_) return;
-  std::cout << "\033[2J\033[H";
-  std::cout << "========================================\n";
-  std::cout << "Hermes Strategy Shell — Live Monitor\n";
-  std::cout << "========================================\n";
-  // TODO: Print live diagnostics from diagnostics_ map
+void Strategy::LoggerWorkerLoop() {
+  while (running_) {
+    LogEntry entry;
+    {
+      std::unique_lock<std::mutex> lock(logMutex_);
+      logCv_.wait(lock, [&]() { return !running_ || !logQueue_.empty(); });
+      if (!running_ && logQueue_.empty()) break;
+      entry = std::move(logQueue_.front());
+      logQueue_.pop();
+    }
+    if (entry.type == LogEntry::OP_LOG) {
+        // Output to CSV
+    } else if (entry.type == LogEntry::TRACE_EXEC) {
+        // Output to trace log
+    }
+  }
 }
 
 void Strategy::PushToLog(LogEntry::Type type, const std::string& content, const std::string& tag) {
@@ -119,160 +694,9 @@ void Strategy::PushToLog(LogEntry::Type type, const std::string& content, const 
   logCv_.notify_one();
 }
 
-void Strategy::LoggerWorkerLoop() {
-  Hermes::Utils::PinThreadToCore(1); // Optional background pinning
-
-  // ── 1. Derive log directory from config (once, at startup) ────────────────
-  const std::string logDir = "logs/" + config_->GetConfig().LOG_DIR_NAME;
-  if (!std::filesystem::exists(logDir))
-    std::filesystem::create_directories(logDir);
-
-  // ── 2. Track open streams keyed by file path (held open for lifetime) ─────
-  std::map<std::string, std::ofstream> streams;
-  auto getStream = [&](const std::string& path) -> std::ofstream& {
-    auto it = streams.find(path);
-    if (it == streams.end()) {
-      auto& f = streams[path];
-      f.open(path, std::ios::app);
-      if (!f) std::cerr << "[Logger] Failed to open: " << path << "\n";
-      return f;
-    }
-    return it->second;
-  };
-
-  // ── 3. Batch drain loop ────────────────────────────────────────────────────
-  while (true) {
-    std::vector<LogEntry> batch;
-    {
-      std::unique_lock<std::mutex> lock(logMutex_);
-      logCv_.wait(lock, [this] { return !logQueue_.empty() || !running_; });
-      while (!logQueue_.empty()) {
-        batch.push_back(std::move(logQueue_.front()));
-        logQueue_.pop();
-      }
-    }
-    if (batch.empty() && !running_) break;
-
-    // ── 4. Compute date once per batch ──────────────────────────────────────
-    std::time_t now_t = std::time(nullptr);
-    char dateBuf[12];
-    std::strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", std::localtime(&now_t));
-    const std::string dateStr(dateBuf);
-    
-    // Cache the config for this batch iteration to avoid multiple mutex acquisitions
-    const auto appConfig = config_->GetConfig();
-
-    for (const auto& entry : batch) {
-      if (entry.type == LogEntry::TRACE_LOG) {
-        // ── 5a. Trace log: date-stamped, persistent stream ─────────────────
-        const std::string path = logDir + "/" + dateStr + "_exec_trace.log";
-        auto& f = getStream(path);
-        if (f) f << entry.content << "\n";
-
-      } else if (entry.type == LogEntry::OP_LOG) {
-        // ── 5b. Op log: tag-suffixed, date-stamped, CSV header guard ────────
-        const std::string suffix = entry.tag.empty()
-            ? "_op.log" : ("_" + entry.tag + "_op.log");
-        const std::string path = logDir + "/" + dateStr + suffix;
-
-        auto& f = getStream(path);
-        if (f) {
-          if (f.tellp() == 0 && !appConfig.OP_LOG_HEADER.empty())
-            f << appConfig.OP_LOG_HEADER << "\n";
-          f << entry.content << "\n";
-        }
-      }
-    }
-
-    // ── 6. Flush all open streams once per batch ───────────────────────────
-    for (auto& [path, f] : streams) f.flush();
-  }
+void Strategy::PushMonitorLogEntry(const std::string& msg) {
+  // ImGui Monitor alert hook
 }
 
-void Strategy::WorkerLoop() {
-  // Primary router thread: reads from SPSC lock-free queue and pushes to pool
-#ifdef HAS_HERMES_TRADER
-  TradeContext ctx;
-  while (running_) {
-    if (auto optCtx = tradeQueue_.pop()) {
-      ctx = *optCtx;
-      std::lock_guard<std::mutex> lock(poolMutex_);
-      executionQueue_.push(ctx);
-      poolCv_.notify_one();
-    } else {
-      std::this_thread::yield();
-    }
-  }
-#endif
+void Strategy::PrintTUI() const {
 }
-
-#ifdef HAS_HERMES_TRADER
-void Strategy::ExecutionWorkerLoop(int id) {
-  while (running_) {
-    TradeContext ctx;
-    {
-      std::unique_lock<std::mutex> lock(poolMutex_);
-      poolCv_.wait(lock, [this] { return !executionQueue_.empty() || !running_; });
-      if (!running_ && executionQueue_.empty()) break;
-      ctx = executionQueue_.front();
-      executionQueue_.pop();
-    }
-    ExecuteStrategy(ctx);
-  }
-}
-
-void Strategy::ExecuteStrategy(const TradeContext &ctx) {
-  auto cfg = config_->GetConfig();
-  std::stringstream trace;
-  auto start = std::chrono::high_resolution_clock::now();
-  auto TRACE = [&](const std::string &msg) {
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::high_resolution_clock::now() - start).count();
-    trace << "[" << us << "us] " << msg << "\n";
-  };
-
-  // ── Phase 1: Submit all legs concurrently ─────────────────────────────────
-  TRACE("Phase 1: Submitting legs (engine=" + cfg.EXECUTION_ENGINE + ")");
-
-  // TODO: Build and submit your strategy's legs here.
-  // Example (replace with your actual TradeLeg construction):
-  //   char id1Buf[256] = {};
-  //   auto f1 = std::async(std::launch::async, [&]() {
-  //       return (PlaceOrder(&leg1, id1Buf, 256) > 0) ? std::string(id1Buf) : "";
-  //   });
-  //   std::string id1 = f1.get();
-  //   TRACE("Leg 1: " + (id1.empty() ? "FAILED (PlaceOrder returned 0)" : id1));
-
-  // ── Phase 2: Poll for fills ───────────────────────────────────────────────
-  TRACE("Phase 2: Polling fills");
-  // TODO: Poll IsOrderCompleted / IsOrderRejected per leg.
-  // Follow CR pattern: loop up to OPT_WAIT_MS with POLL_INTERVAL_MS steps.
-
-  // ── Phase 3: DPR fallback for unfilled legs ───────────────────────────────
-  TRACE("Phase 3: DPR fallback check");
-  // TODO: ModifyOrder to DPR price for any leg still open after OPT_WAIT_MS.
-
-  // ── Commit trace to log ───────────────────────────────────────────────────
-  PushToLog(LogEntry::TRACE_LOG, "=== EXECUTION CYCLE " + trace.str());
-}
-
-bool Strategy::IsOrderCompleted(const std::string &orderId) {
-  if (orderId.empty()) return true; // Guard: empty ID = PlaceOrder failed, treat as done
-  char buf[8192] = {};
-  int len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
-  if (len <= 0) return false;
-  // TODO: Parse broker-specific "filled/traded/complete" status from buf.
-  // Example: return strstr(buf, "\"status\":\"filled\"") != nullptr;
-  return false;
-}
-
-bool Strategy::IsOrderRejected(const std::string &orderId) {
-  if (orderId.empty()) return true; // Guard: empty ID = treat as rejected
-  char buf[8192] = {};
-  int len = FetchOrderDetail(orderId.c_str(), buf, sizeof(buf));
-  if (len <= 0) return false;
-  // TODO: Parse broker-specific "rejected" status from buf.
-  // Example: return strstr(buf, "\"status\":\"rejected\"") != nullptr;
-  return false;
-}
-#endif

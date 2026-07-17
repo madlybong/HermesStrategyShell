@@ -1,6 +1,6 @@
 {
-  "name": "hermesstrategyshell",
-  "version-string": "0.3.0.0",
+  "name": "hermesfutcashstrategy",
+  "version-string": "0.1.0.0",
   "dependencies": [
     "curl",
     "lzo",
@@ -13,6 +13,7 @@
         "name": "imgui",
         "features": ["dx11-binding", "win32-binding", "docking-experimental"]
     },
-    "implot"
+    "implot",
+    "cpp-httplib"
   ]
 }

@@ -8,7 +8,7 @@ if not exist "build\Release\tests.exe" (
     exit /b 1
 )
 
-echo [INFO] Running HermesStrategyShell tests...
+echo [INFO] Running HermesFutCashStrategy tests...
 build\Release\tests.exe %*
 
 if %ERRORLEVEL% EQU 0 (

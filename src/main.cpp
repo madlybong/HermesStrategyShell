@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
     if (std::string(argv[i]) == "--monitor") { monitorMode = true; }
   }
 
-  std::cout << "[HSS] HermesStrategyShell v" << HSS_VERSION 
+  std::cout << "[HFC] HermesFutCashStrategy v" << HSS_VERSION 
             << (debugMode ? " (DEBUG MODE)" : "") 
             << (monitorMode ? " (MONITOR MODE)" : "") << "...\n";
 
